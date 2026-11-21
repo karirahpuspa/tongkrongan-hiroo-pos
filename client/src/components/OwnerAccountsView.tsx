@@ -1,18 +1,13 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Edit3, KeyRound, Plus, UserCheck, UserX, X } from 'lucide-react';
 import { usePos } from '../store/posStore';
+import { userApi } from '../lib/api';
 import { User, UserRole } from '../types/pos';
 import { formatDateID } from '../utils/format';
 
 export const OwnerAccountsView: React.FC = () => {
-  const {
-    currentUser,
-    users,
-    addUser,
-    updateUser,
-    toggleUserActive,
-    resetUserPassword,
-  } = usePos();
+  const { currentUser } = usePos();
+  const [users, setUsers] = useState<User[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -27,6 +22,19 @@ export const OwnerAccountsView: React.FC = () => {
   const [resetError, setResetError] = useState<string | null>(null);
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const fetchUsers = useCallback(async () => {
+    const res = await userApi.list();
+    if (res.success && res.data) {
+      setUsers(res.data);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentUser?.role === 'owner') {
+      fetchUsers();
+    }
+  }, [currentUser, fetchUsers]);
 
   if (currentUser?.role !== 'owner') {
     return (
@@ -68,33 +76,55 @@ export const OwnerAccountsView: React.FC = () => {
     setModalOpen(true);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
+    const cleanName = name.trim();
+    const cleanUsername = username.trim().toLowerCase();
+
+    if (!cleanName) {
+      setFormError('Nama lengkap wajib diisi.');
+      return;
+    }
+    if (!cleanUsername) {
+      setFormError('Username wajib diisi.');
+      return;
+    }
+    if (!editingUser && (!password || password.length < 4)) {
+      setFormError('Password awal minimal 4 karakter.');
+      return;
+    }
+
     const res = editingUser
-      ? updateUser(editingUser.id, { name, username, role })
-      : addUser({ name, username, role, password });
+      ? await userApi.update(editingUser.id, { name: cleanName, username: cleanUsername, role })
+      : await userApi.create({ name: cleanName, username: cleanUsername, role, password });
 
     if (!res.success) {
       setFormError(res.message);
       return;
     }
     setModalOpen(false);
-    showToast(res.message);
+    showToast(res.message || (editingUser ? `Akun "${cleanName}" berhasil diperbarui.` : `Akun "${cleanName}" berhasil ditambahkan.`));
+    await fetchUsers();
   };
 
-  const handleResetSubmit = (e: React.FormEvent) => {
+  const handleResetSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!resetTarget) return;
     setResetError(null);
-    const res = resetUserPassword(resetTarget.id, newPass);
+    if (!newPass || newPass.length < 4) {
+      setResetError('Kata sandi baru minimal 4 karakter.');
+      return;
+    }
+    const res = await userApi.resetPassword(resetTarget.id, newPass);
     if (!res.success) {
       setResetError(res.message);
       return;
     }
     setResetTarget(null);
     setNewPass('');
-    showToast(res.message);
+    showToast(res.message || `Kata sandi akun ${resetTarget.username} berhasil direset.`);
+    await fetchUsers();
   };
 
   return (
@@ -190,12 +220,22 @@ export const OwnerAccountsView: React.FC = () => {
                       <KeyRound className="w-3 h-3" />
                       <span>Reset Sandi</span>
                     </button>
-                    {u.id !== currentUser.id && (
+                    {String(u.id) !== String(currentUser.id) && (
                       <button
                         type="button"
-                        onClick={() => {
-                          const res = toggleUserActive(u.id);
-                          showToast(res.message);
+                        onClick={async () => {
+                          const newStatus = !u.is_active;
+                          const res = await userApi.toggleActive(u.id, newStatus);
+                          if (res.success) {
+                            showToast(`Akun ${u.name} ${newStatus ? 'diaktifkan' : 'dinonaktifkan'}.`);
+                            setUsers((prev) =>
+                              prev.map((item) =>
+                                item.id === u.id ? { ...item, is_active: newStatus } : item
+                              )
+                            );
+                          } else {
+                            showToast(res.message || 'Gagal mengubah status aktif akun.');
+                          }
                         }}
                         className={`rounded-full border border-[#141414] px-2.5 py-1 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer ${
                           u.is_active

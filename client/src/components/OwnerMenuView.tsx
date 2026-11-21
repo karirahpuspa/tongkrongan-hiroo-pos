@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Edit3, ImagePlus, Plus, Trash2, X } from 'lucide-react';
 import { usePos } from '../store/posStore';
+import { menuApi } from '../lib/api';
 import { MenuCategory, MenuItem } from '../types/pos';
 import { formatRupiah } from '../utils/format';
 import { MenuArtwork } from './MenuArtwork';
@@ -9,15 +10,9 @@ const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2 MB
 
 export const OwnerMenuView: React.FC = () => {
-  const {
-    currentUser,
-    menus,
-    addMenu,
-    updateMenu,
-    toggleMenuAvailability,
-    toggleMenuActive,
-  } = usePos();
+  const { currentUser } = usePos();
 
+  const [menus, setMenus] = useState<MenuItem[]>([]);
   const [filterCategory, setFilterCategory] = useState<'Semua' | MenuCategory>('Semua');
   const [modalOpen, setModalOpen] = useState(false);
   const [editingMenu, setEditingMenu] = useState<MenuItem | null>(null);
@@ -29,9 +24,23 @@ export const OwnerMenuView: React.FC = () => {
   const [servingLabel, setServingLabel] = useState('');
   const [badgeText, setBadgeText] = useState('');
   const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const [formError, setFormError] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  const fetchMenus = useCallback(async () => {
+    const res = await menuApi.list(true);
+    if (res.success && res.data) {
+      setMenus(res.data);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentUser?.role === 'owner') {
+      fetchMenus();
+    }
+  }, [currentUser, fetchMenus]);
 
   const filteredMenus = useMemo(
     () =>
@@ -70,6 +79,7 @@ export const OwnerMenuView: React.FC = () => {
     setServingLabel('');
     setBadgeText('');
     setImageUrl(null);
+    setSelectedFile(null);
     setFormError(null);
     setModalOpen(true);
   };
@@ -83,6 +93,7 @@ export const OwnerMenuView: React.FC = () => {
     setServingLabel(menu.serving_label);
     setBadgeText(menu.badge_text ?? '');
     setImageUrl(menu.image_url);
+    setSelectedFile(null);
     setFormError(null);
     setModalOpen(true);
   };
@@ -103,6 +114,7 @@ export const OwnerMenuView: React.FC = () => {
       return;
     }
 
+    setSelectedFile(file);
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
@@ -112,7 +124,7 @@ export const OwnerMenuView: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
     const parsedPrice = Number(priceInput);
@@ -125,6 +137,16 @@ export const OwnerMenuView: React.FC = () => {
       return;
     }
 
+    let finalImageUrl = imageUrl;
+    if (selectedFile) {
+      const uploadRes = await menuApi.uploadImage(selectedFile);
+      if (!uploadRes.success || !uploadRes.data?.url) {
+        setFormError(uploadRes.message || 'Gagal mengunggah foto menu.');
+        return;
+      }
+      finalImageUrl = uploadRes.data.url;
+    }
+
     const payload = {
       code,
       name,
@@ -132,19 +154,28 @@ export const OwnerMenuView: React.FC = () => {
       price: parsedPrice,
       serving_label: servingLabel,
       badge_text: badgeText,
-      image_url: imageUrl,
+      image_url: finalImageUrl,
     };
 
-    const res = editingMenu
-      ? updateMenu(editingMenu.id, payload)
-      : addMenu(payload);
-
-    if (!res.success) {
-      setFormError(res.message);
-      return;
+    if (editingMenu) {
+      const res = await menuApi.update(editingMenu.id, payload);
+      if (!res.success) {
+        setFormError(res.message);
+        return;
+      }
+      setModalOpen(false);
+      showToast(res.message || `Menu "${name}" berhasil diperbarui.`);
+      await fetchMenus();
+    } else {
+      const res = await menuApi.create(payload);
+      if (!res.success) {
+        setFormError(res.message);
+        return;
+      }
+      setModalOpen(false);
+      showToast(res.message || `Menu "${name}" berhasil ditambahkan.`);
+      await fetchMenus();
     }
-    setModalOpen(false);
-    showToast(res.message);
   };
 
   return (
@@ -245,9 +276,23 @@ export const OwnerMenuView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const res = toggleMenuAvailability(menu.id);
-                  showToast(res.message);
+                onClick={async () => {
+                  const newStatus = !menu.is_available;
+                  const res = await menuApi.patch(menu.id, { is_available: newStatus });
+                  if (res.success) {
+                    showToast(
+                      `Status ketersediaan ${menu.name} diubah menjadi ${
+                        newStatus ? 'Tersedia' : 'Habis'
+                      }.`
+                    );
+                    setMenus((prev) =>
+                      prev.map((m) =>
+                        m.id === menu.id ? { ...m, is_available: newStatus } : m
+                      )
+                    );
+                  } else {
+                    showToast(res.message || 'Gagal mengubah status ketersediaan.');
+                  }
                 }}
                 className={`rounded-full border border-[#141414] py-1.5 px-2.5 text-[11px] font-bold cursor-pointer ${
                   menu.is_available
@@ -259,9 +304,21 @@ export const OwnerMenuView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const res = toggleMenuActive(menu.id);
-                  showToast(res.message);
+                onClick={async () => {
+                  const newStatus = !menu.is_active;
+                  const res = await menuApi.patch(menu.id, { is_active: newStatus });
+                  if (res.success) {
+                    showToast(
+                      `Menu ${menu.name} ${newStatus ? 'diaktifkan' : 'dinonaktifkan'}.`
+                    );
+                    setMenus((prev) =>
+                      prev.map((m) =>
+                        m.id === menu.id ? { ...m, is_active: newStatus } : m
+                      )
+                    );
+                  } else {
+                    showToast(res.message || 'Gagal mengubah status aktif menu.');
+                  }
                 }}
                 className="rounded-full border border-[#141414] bg-white py-1.5 px-2.5 text-[11px] font-bold hover:bg-zinc-100 cursor-pointer"
               >
@@ -375,7 +432,10 @@ export const OwnerMenuView: React.FC = () => {
                 {imageUrl && (
                   <button
                     type="button"
-                    onClick={() => setImageUrl(null)}
+                    onClick={() => {
+                      setImageUrl(null);
+                      setSelectedFile(null);
+                    }}
                     className="inline-flex items-center gap-1 text-[11px] font-bold text-[#C93B2B] cursor-pointer"
                   >
                     <Trash2 className="w-3 h-3" />

@@ -1,5 +1,8 @@
 import { Router } from 'express';
 import authRoutes from './auth.js';
+import menuRoutes from './menus.js';
+import userRoutes from './users.js';
+import reportRoutes from './reports.js';
 import { checkDb } from '../config/db.js';
 import { asyncHandler, ok } from '../utils/response.js';
 
@@ -15,8 +18,8 @@ router.use('/auth', authRoutes);
 // Tempat mendaftarkan route modul lain (jangan ubah route milik orang lain):
 // router.use('/shifts', shiftRoutes);   // Dwi
 // router.use('/orders', orderRoutes);   // Dwi
-// router.use('/menus', menuRoutes);     // Ilham
-// router.use('/reports', reportRoutes); // Ilham
-// router.use('/users', userRoutes);     // Ilham
+router.use('/menus', menuRoutes);     // Ilham
+router.use('/reports', reportRoutes); // Ilham
+router.use('/users', userRoutes);     // Ilham
 
 export default router;

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Ban,
   CreditCard,
@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { usePos } from '../store/posStore';
+import { reportApi } from '../lib/api';
 import { Order, OrderStatus, PaymentMethod } from '../types/pos';
 import {
   formatDateID,
@@ -34,7 +35,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   const {
     currentUser,
     activeShift,
-    orders,
+    orders: storeOrders,
     menus,
     payOrder,
     cancelOrder,
@@ -44,12 +45,24 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   const isOwner = currentUser?.role === 'owner';
 
+  const [apiOrders, setApiOrders] = useState<Order[] | null>(null);
   const [search, setSearch] = useState('');
   const [filterTab, setFilterTab] = useState<
     'all' | 'cash' | 'qris' | 'pending_payment' | 'cancelled'
   >('all');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
+
+  const fetchOrders = useCallback(async () => {
+    const res = await reportApi.getHistory();
+    if (res.success && res.data) {
+      setApiOrders(res.data);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchOrders();
+  }, [fetchOrders]);
 
   // Pay pending modal
   const [payingOrder, setPayingOrder] = useState<Order | null>(null);
@@ -73,17 +86,19 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
+  const effectiveOrders = apiOrders !== null ? apiOrders : storeOrders;
+
   // PRD 6.1: Cashier sees own shift/orders; Owner sees all
   const scopedOrders = useMemo(() => {
     const base = isOwner
-      ? orders
-      : orders.filter(
+      ? effectiveOrders
+      : effectiveOrders.filter(
           (o) =>
             (activeShift && o.shift_id === activeShift.id) ||
             o.cashier_id === currentUser?.id
         );
     return base.map((o) => sanitizeOrderForViewer(o));
-  }, [orders, isOwner, activeShift, currentUser, sanitizeOrderForViewer]);
+  }, [effectiveOrders, isOwner, activeShift, currentUser, sanitizeOrderForViewer]);
 
   const filteredOrders = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -172,6 +187,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     setPayingOrder(null);
     setReceiptOrder(sanitizeOrderForViewer(res.data));
     showToast(res.message);
+    fetchOrders();
   };
 
   const handleSubmitCancel = (e: React.FormEvent) => {
@@ -186,6 +202,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     setCancellingOrder(null);
     setCancelReason('');
     showToast(res.message);
+    fetchOrders();
   };
 
   const openCorrectionModal = (order: Order) => {
@@ -219,6 +236,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
     }
     setCorrectingOrder(null);
     showToast(res.message);
+    fetchOrders();
   };
 
   return (

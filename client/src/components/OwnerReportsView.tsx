@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Download,
   FileSpreadsheet,
@@ -7,6 +7,7 @@ import {
   X,
 } from 'lucide-react';
 import { usePos } from '../store/posStore';
+import { reportApi, SalesReportResponse } from '../lib/api';
 import { Order, Shift } from '../types/pos';
 import {
   formatDateID,
@@ -24,6 +25,23 @@ export const OwnerReportsView: React.FC = () => {
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [receiptOrder, setReceiptOrder] = useState<Order | null>(null);
+  const [reportData, setReportData] = useState<SalesReportResponse | null>(null);
+
+  const fetchReport = useCallback(async (start?: string, end?: string) => {
+    const res = await reportApi.getSalesReport({
+      startDate: start || undefined,
+      endDate: end || undefined,
+    });
+    if (res.success && res.data) {
+      setReportData(res.data);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (currentUser?.role === 'owner') {
+      fetchReport(startDate, endDate);
+    }
+  }, [currentUser, startDate, endDate, fetchReport]);
 
   // Force-close modal for open shift (FR-11)
   const [forceCloseShift, setForceCloseShift] = useState<Shift | null>(null);
@@ -36,23 +54,26 @@ export const OwnerReportsView: React.FC = () => {
   const yesterday = getYesterdayDateStr();
 
   const filteredPaidOrders = useMemo(() => {
+    if (reportData?.paidOrders) return reportData.paidOrders;
     return orders.filter((o) => {
       if (o.payment?.status !== 'paid') return false;
       if (startDate && o.business_date < startDate) return false;
       if (endDate && o.business_date > endDate) return false;
       return true;
     });
-  }, [orders, startDate, endDate]);
+  }, [reportData, orders, startDate, endDate]);
 
   const filteredShifts = useMemo(() => {
+    if (reportData?.shifts) return reportData.shifts;
     return shifts.filter((s) => {
       if (startDate && s.business_date < startDate) return false;
       if (endDate && s.business_date > endDate) return false;
       return true;
     });
-  }, [shifts, startDate, endDate]);
+  }, [reportData, shifts, startDate, endDate]);
 
   const summary = useMemo(() => {
+    if (reportData?.summary) return reportData.summary;
     const totalRevenue = filteredPaidOrders.reduce((s, o) => s + o.total, 0);
     const cashOrders = filteredPaidOrders.filter(
       (o) => o.payment?.method === 'cash'
@@ -71,9 +92,10 @@ export const OwnerReportsView: React.FC = () => {
       qrisRevenue,
       qrisCount: qrisOrders.length,
     };
-  }, [filteredPaidOrders]);
+  }, [reportData, filteredPaidOrders]);
 
   const topMenus = useMemo(() => {
+    if (reportData?.topMenus) return reportData.topMenus;
     const map = new Map<
       string,
       { menu_name: string; qty: number; revenue: number }
@@ -91,9 +113,10 @@ export const OwnerReportsView: React.FC = () => {
       }
     }
     return Array.from(map.values()).sort((a, b) => b.qty - a.qty);
-  }, [filteredPaidOrders]);
+  }, [reportData, filteredPaidOrders]);
 
   const perCashierSummary = useMemo(() => {
+    if (reportData?.perCashierSummary) return reportData.perCashierSummary;
     const map = new Map<
       string,
       { cashier_name: string; txCount: number; cashTotal: number; qrisTotal: number; total: number }
@@ -113,7 +136,7 @@ export const OwnerReportsView: React.FC = () => {
       map.set(order.cashier_id, cur);
     }
     return Array.from(map.values()).sort((a, b) => b.total - a.total);
-  }, [filteredPaidOrders]);
+  }, [reportData, filteredPaidOrders]);
 
   if (currentUser?.role !== 'owner') {
     return (
@@ -238,6 +261,7 @@ export const OwnerReportsView: React.FC = () => {
     }
     setForceCloseShift(null);
     setToastMsg(res.message);
+    fetchReport(startDate, endDate);
   };
 
   return (
